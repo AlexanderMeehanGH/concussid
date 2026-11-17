@@ -74,18 +74,25 @@ export const REFS = {
   },
 };
 
-// Immediate-removal / emergency signs (CISG 2023, SCAT6, CRT6).
+// Red flags needing urgent medical assessment (on site or at A&E; ambulance if needed).
+// CRT6 / CISG 2023 list, plus the extra items in the UK grassroots guidelines (Nov 2024).
 export const RED_FLAGS = [
   'Neck pain or tenderness',
-  'Seizure, fit or convulsion',
-  'Double vision',
   'Loss of consciousness',
-  'Weakness, tingling or burning in more than one arm or leg',
-  'Deteriorating conscious state',
-  'Vomiting',
+  'Deteriorating conscious state (more drowsy)',
+  'Seizure, fit, convulsion, or lying rigid',
+  'Double vision',
+  'Weakness, tingling, numbness or burning in arms or legs',
   'Severe or increasing headache',
-  'Increasingly restless, agitated or combative',
-  'Visible deformity of the skull',
+  'Vomiting',
+  'Increasingly confused, restless, agitated or combative',
+  'Unusual change in behaviour',
+  'No memory of events before or after the injury',
+  'Difficulty understanding, speaking, reading or writing',
+  'Visible skull deformity or suspected skull fracture',
+  'Has had brain surgery, or has a bleeding disorder',
+  'Takes blood-thinning medication',
+  'Under the influence of alcohol or drugs',
 ];
 
 export const GCS = {

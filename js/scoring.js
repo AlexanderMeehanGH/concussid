@@ -96,11 +96,19 @@ export function evaluate(d, baseline, T = THRESHOLDS) {
   let symptom = null;
   if (d.symptoms) {
     symptom = symptomVerdict(d.symptoms, baseline?.symptoms, T);
-    const flag = match ? !symptom.pass : null;
-    if (flag) {
-      core = true;
+    // Governing-body rule (CISG 2023, UK 2024, World Rugby, GAA, AFL): ANY symptom of suspected
+    // concussion means removal, so a new or worse symptom withdraws the player even when the
+    // weighted score is below the research threshold.
+    const worse = SYMPTOMS.filter((_, i) => d.symptoms[i] > (baseline?.symptoms?.[i] || 0));
+    symptom.newSymptoms = worse;
+    const flag = match ? (!symptom.pass || worse.length > 0) : null;
+    if (match && !symptom.pass) {
       reasons.push(`Weighted symptom score ${symptom.score}${symptom.hasBaseline ? ` (baseline ${symptom.base})` : ''}: up ${symptom.rise}, fail threshold is ${symptom.threshold}`);
     }
+    if (match && worse.length) {
+      reasons.push(`${symptom.hasBaseline ? 'New or worse symptom' : 'Symptom reported'}: ${worse.join(', ')}. Any symptom of suspected concussion means withdrawal.`);
+    }
+    if (flag) core = true;
     add('Symptoms', 'Weighted symptom score (/132)', s.symSeverity, b?.symSeverity, flag);
     add('Symptoms', 'Number of symptoms (/22)', s.symCount, b?.symCount, null);
   }

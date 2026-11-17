@@ -4,6 +4,7 @@ import {
 } from './protocol.js';
 import { recordAudio, analyzeSpeech } from './speech.js';
 import { sum, fmt, gcsTotal, anyRed, digitsScore, digitsDone, scoreOf, evaluate, symptomVerdict, severityBand } from './scoring.js';
+import { BODIES, CATEGORIES, getSettings, saveSettings, currentBody, returnPlan, aftercare } from './guidelines.js';
 import { startCamera, stopCamera, initFace, runFaceProtocol, faceMetrics, detectOnce } from './face.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -44,6 +45,8 @@ function route() {
   const nav = { athletes: 'athletes', athlete: 'athletes', evidence: 'evidence' }[v] || 'home';
   document.querySelectorAll('[data-nav]').forEach((l) => (l.dataset.nav === nav ? l.setAttribute('aria-current', 'page') : l.removeAttribute('aria-current')));
   document.body.classList.toggle('in-wizard', v === 'assess');
+  const em = document.querySelector('.emergency');
+  if (em) { const n = currentBody().emergency; em.href = `tel:${n}`; em.title = `Call emergency services (${n})`; }
   if (v === 'athletes') return viewAthletes();
   if (v === 'athlete') return viewAthlete(a);
   if (v === 'assess') return startWizard(a, b);
@@ -80,6 +83,16 @@ const baselineFor = (a, x) => [...(a.oldBaselines || []), a.baseline].filter((b)
 const isUnderReview = (a) => { const x = lastAssessment(a); return x && x.eval?.decision !== 'monitor' && Date.now() - new Date(x.date) < 48 * 3600e3; };
 const ago = (iso) => { const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString(); };
 
+// Which governing body's concussion rules the club follows.
+function rulesPicker() {
+  const cur = getSettings().body;
+  return `<div class="rules" role="group" aria-label="Concussion rules your club follows">${Object.entries(BODIES).map(([k, b]) => `
+    <button type="button" class="rule" data-act="setbody" data-k="${k}" aria-pressed="${cur === k}"><span style="flex:1"><b>${esc(b.name)}</b><span>${esc(b.detail)}</span></span>${cur === k ? ICON.check : ''}</button>`).join('')}</div>`;
+}
+function bindRules(after) {
+  actions.setbody = (el) => { saveSettings({ ...getSettings(), body: el.dataset.k }); route(); after?.(); };
+}
+
 function viewHome() {
   const squad = db.athletes.filter((a) => !a.name.startsWith('Unregistered player'));
   const review = db.athletes.filter(isUnderReview);
@@ -106,6 +119,9 @@ function viewHome() {
   ${missing.length ? `<div class="list">${missing.slice(0, 4).map((a) => `<a class="list-row" href="#/assess/${a.id}/baseline"><span class="avatar">${esc(initials(a.name))}</span><span class="grow"><span class="title">${esc(a.name)}</span><span class="sub">Tap to record baseline</span></span><span class="tag exp">No baseline</span></a>`).join('')}</div>`
     : squad.length ? '<p class="muted small">Every player has a baseline.</p>' : '<div class="card"><b>Start with your squad.</b><p class="muted small" style="margin:.3em 0 .8em">Record each player’s baseline pre-season so pitchside results can be compared with their own normal.</p><a class="btn primary sm" href="#/athletes">Add players</a></div>'}
 
+  ${getSettings().body ? '' : `<div class="section-head"><h2>Which rules does your club follow?</h2></div>
+  <p class="small muted" style="margin-top:-4px">Sets the emergency number, aftercare advice and return-to-play dates. You can change it later on the Squad page.</p>${rulesPicker()}`}
+
   <div class="section-head"><h2>How it works</h2></div>
   <div class="steps4">
     <div class="card"><span class="tag">1</span><b>Baseline</b><span class="small muted">Record each player while healthy.</span></div>
@@ -119,6 +135,7 @@ function viewHome() {
     const p = $('#picker'); p.hidden = !p.hidden; el.setAttribute('aria-expanded', String(!p.hidden));
   };
   actions.quick = () => { location.hash = `#/assess/${quickAthlete().id}/match`; };
+  bindRules();
 }
 
 function viewAthletes() {
@@ -136,6 +153,7 @@ function viewAthletes() {
     <div class="grid">
       <label class="field">Name<input name="name" required maxlength="80" autocomplete="off"></label>
       <label class="field">Team<input name="team" maxlength="80" autocomplete="off"></label>
+      <label class="field">Category<select name="category" required><option value="">Choose…</option>${Object.entries(CATEGORIES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></label>
       <label class="field">Sport<select name="sport"><option>Rugby union</option><option>Rugby league</option><option>Football (soccer)</option><option>Gaelic football</option><option>Hurling / camogie</option><option>Australian football</option><option>American football</option><option>Ice hockey</option><option>Other</option></select></label>
     </div>
     <button class="btn primary block">Add player</button>
@@ -146,9 +164,11 @@ function viewAthletes() {
   </div>`;
   actions.add = (form) => {
     const f = new FormData(form);
-    db.athletes.push({ id: uid(), name: f.get('name').trim(), team: f.get('team').trim(), sport: f.get('sport'), created: Date.now(), baseline: null, oldBaselines: [], assessments: [] });
+    db.athletes.push({ id: uid(), name: f.get('name').trim(), team: f.get('team').trim(), sport: f.get('sport'), category: f.get('category'), created: Date.now(), baseline: null, oldBaselines: [], assessments: [] });
     persist(); viewAthletes();
   };
+  app.insertAdjacentHTML('beforeend', `<div class="section-head"><h2>Concussion rules</h2></div><p class="small muted" style="margin-top:-4px">The governing body your club follows. Sets the emergency number, aftercare and return-to-play dates.</p>${rulesPicker()}`);
+  bindRules();
   actions.export = () => download('concussid-export.json', db);
 }
 
@@ -163,6 +183,8 @@ function viewAthlete(id) {
     <a class="btn primary lg block" href="#/assess/${a.id}/match">Pitchside screen ${ICON.arrow}</a>
     <a class="btn block" href="#/assess/${a.id}/baseline">${a.baseline ? 'Re-record baseline' : 'Record baseline'}</a>
   </div>
+  <label class="field" style="max-width:320px">Category (sets return-to-play timings)<select data-change="setcat"><option value="">Not set (most cautious timings used)</option>${Object.entries(CATEGORIES).map(([k, l]) => `<option value="${k}" ${a.category === k ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+  ${(() => { const x = lastAssessment(a); return x && x.eval?.decision !== 'monitor' ? returnPlanCard(a, x.date) : ''; })()}
   <h2>Baseline</h2>
   ${a.baseline ? `<div class="card tight row spread"><span>Recorded ${new Date(a.baseline.date).toLocaleString()}</span><a href="#/report/${a.id}/${a.baseline.id}">View</a></div>` : '<p class="muted">No baseline recorded. Without one, ConcussID can only apply consensus red-flag, observable-sign, Maddocks and symptom rules; experimental markers cannot be interpreted.</p>'}
   <h2>Assessments</h2>
@@ -171,6 +193,7 @@ function viewAthlete(id) {
     <button class="btn sm" data-act="export">Export athlete (JSON)</button>
     <button class="btn sm ghost" data-act="del">Delete athlete</button>
   </div>`;
+  actions.setcat = (el) => { a.category = el.value || undefined; persist(); viewAthlete(id); };
   actions.export = () => download(`concussid-${a.name.replace(/\W+/g, '_')}.json`, a);
   actions.del = () => {
     if (!confirm(`Permanently delete ${a.name} and all their records from this device? This cannot be undone.`)) return;
@@ -214,15 +237,33 @@ function speakWords(words, btn) {
   }, i * 1000));
 }
 
+// Return-to-play plan under the club's chosen governing body, dated from the injury (day 0).
+function returnPlanCard(a, injuryISO) {
+  const s = getSettings();
+  const p = returnPlan(s.body || 'cisg', a.category, injuryISO);
+  const d = (x) => x.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+  return `<section class="card">
+    <div class="row spread gap"><h3 style="margin:0">Return to play</h3><span class="tag core">${esc(p.body.name)}</span></div>
+    ${s.body ? '' : '<p class="small" style="color:var(--amber);margin:8px 0 0"><b>Choose your club’s rules on the Squad page.</b> The international consensus is shown until you do.</p>'}
+    <p class="small muted" style="margin:6px 0 10px">${esc(CATEGORIES[p.cat])}${CATEGORIES[a.category] ? '' : ' (age not set, so the most cautious timings are used)'} · day 0 = ${d(new Date(injuryISO))}</p>
+    ${p.competitionDate ? `<div class="banner red" style="margin:0 0 10px"><b>Earliest return to competition: ${d(p.competitionDate)} (day ${p.competitionDay}).</b> Only if every stage is completed without symptoms. This is the earliest date, not a target.</div>` : ''}
+    <ol class="rtp">${p.stages.map((st) => `<li><span class="rtp-day">${st.approx ? '~' : ''}Day ${st.day}<br><small>${d(st.date)}</small></span><span><b>${esc(st.label)}</b><br><span class="small muted">${esc(st.note)}${st.verify ? ' <span class="tag exp">Verify</span>' : ''}</span></span></li>`).join('')}</ol>
+    <p class="small" style="margin:10px 0 0">${esc(p.body.clearance)}</p>
+    <p class="small muted" style="margin:6px 0 0">Source: <a href="${p.body.source.url}" target="_blank" rel="noopener">${esc(p.body.source.title)}</a></p>
+  </section>`;
+}
+
 // Weighted symptom score card: each symptom counts its own 0–6 severity; pass/fail vs baseline.
 function symptomScoreCard(symptoms, baseSymptoms, judge, sticky = false) {
   const v = symptomVerdict(symptoms, baseSymptoms);
   const bands = { Mild: 0, Moderate: 0, Severe: 0 };
   symptoms.forEach((x) => { if (x > 0) bands[severityBand(x)]++; });
-  const badge = judge ? (v.pass ? '<span class="score-pill">PASS</span>' : '<span class="score-pill bad">FAIL</span>') : '';
+  const newSx = symptoms.some((x, i) => x > (baseSymptoms?.[i] || 0));
+  const badge = judge ? (!v.pass ? '<span class="score-pill bad">FAIL</span>' : newSx ? '<span class="score-pill bad">NEW SYMPTOM</span>' : '<span class="score-pill">PASS</span>') : '';
   return `<section class="card score-card ${sticky ? 'sticky' : ''} ${judge && !v.pass ? 'fail' : ''}" aria-live="polite">
     <div class="row spread gap"><span><span class="small muted">Weighted symptom score</span><br><b class="big-num">${v.score}</b><span class="muted"> / 132</span></span>${badge}</div>
     <div class="weights"><span><i class="w1"></i>${bands.Mild} mild (1–2 pts each)</span><span><i class="w3"></i>${bands.Moderate} moderate (3–4 pts)</span><span><i class="w5"></i>${bands.Severe} severe (5–6 pts)</span></div>
+    ${judge && v.pass && newSx ? '<p class="small" style="margin:8px 0 0;color:var(--red-ink)"><b>Below the score threshold, but a symptom is new or worse.</b> Every governing body requires withdrawal for any symptom of suspected concussion.</p>' : ''}
     ${judge ? `<p class="small" style="margin:8px 0 0">${v.hasBaseline ? `Baseline ${v.base} · change <b>${v.rise >= 0 ? '+' : ''}${v.rise}</b>` : '<b>No baseline</b>, compared with 0'} · fails at <b>+${v.threshold} or more</b> <span class="muted">(Harmon et al., 2024: catches 87% of concussions, clears 79% of healthy players)</span></p>` : ''}
   </section>`;
 }
@@ -234,7 +275,7 @@ const STEPS = {
       d.redflags ??= { items: RED_FLAGS.map(() => false), gcs: { e: 4, v: 5, m: 6 } };
       const r = d.redflags, g = gcsTotal(d);
       return `<p class="lede">Tap any sign you see. One is enough for an emergency.</p>
-      ${anyRed(d) ? `<div class="banner red" role="alert"><b>Emergency: call an ambulance.</b> Don’t move the player if the neck may be hurt; only trained staff should remove a helmet. <a href="tel:112"><b>Call 112</b></a></div>` : ''}
+      ${anyRed(d) ? `<div class="banner red" role="alert"><b>Get urgent medical help.</b> Call ${currentBody().emergency} for an ambulance unless a doctor on site is managing them. Don’t move the player if the neck may be hurt; only trained staff should remove a helmet. <a href="tel:${currentBody().emergency}"><b>Call ${currentBody().emergency}</b></a></div>` : ''}
       ${checkList('rf', RED_FLAGS, r.items)}
       <details class="card" ${d.gcsOpen ? 'open' : ''} data-gcs>
         <summary><span><b>Glasgow Coma Scale</b><br><span class="small muted">Eyes ${r.gcs.e} · Verbal ${r.gcs.v} · Motor ${r.gcs.m}</span></span><span class="score-pill ${g < 15 ? 'bad' : ''}">${g} / 15</span></summary>
@@ -618,24 +659,28 @@ function viewReport(aid, rid) {
   if (!r) { location.hash = '#/athletes'; return; }
   const isBase = r.mode === 'baseline';
   const ev = isBase ? evaluate(r, null) : r.eval;
+  const body = currentBody();
+  const num = body.emergency;
   const V = isBase
     ? { cls: 'green', icon: ICON.ok, title: 'Baseline saved', text: `Future pitchside screens for ${esc(a.name)} will be compared with these values. Re-record each season, when the player is rested and hasn’t trained in the last few hours.` }
     : {
-      emergency: { cls: 'red', icon: ICON.alert.replace('class="icon"', 'width="26" height="26"'), title: 'Emergency', text: 'Call an ambulance now. Don’t move the player if the neck may be hurt, and don’t leave them alone.', extra: '<a class="btn" href="tel:112">Call 112</a>' },
-      remove: { cls: 'red', icon: ICON.minus, title: 'Withdraw Player from Game', text: `Suspected concussion. Must not return today. A doctor decides the diagnosis.${ev.expOnly ? ' This result comes only from the experimental speech or eye measures.' : ''}` },
-      monitor: { cls: 'amber', icon: ICON.clock.replace('class="icon"', 'width="26" height="26"'), title: 'No signs found', text: `This screen found nothing, but that does not rule out concussion. Symptoms can appear over hours.${ev.hadBaseline ? '' : ' No baseline on file, so many checks could not be compared.'}` },
+      emergency: { cls: 'red', icon: ICON.alert.replace('class="icon"', 'width="26" height="26"'), title: 'Emergency', text: `Get urgent medical help now: call ${num} for an ambulance unless a doctor on site is managing them. Don’t move the player if the neck may be hurt, and don’t leave them alone.`, extra: `<a class="btn" href="tel:${num}">Call ${num}</a>` },
+      remove: { cls: 'red', icon: ICON.minus, title: 'Withdraw Player from Game', text: `Suspected concussion. No return today, even if they feel better. Only a healthcare professional can rule concussion out.${ev.expOnly ? ' This result comes only from the experimental speech or eye measures.' : ''}` },
+      monitor: { cls: 'amber', icon: ICON.clock.replace('class="icon"', 'width="26" height="26"'), title: 'No signs found', text: `This screen cannot clear a player. Only a healthcare professional can rule out concussion, and symptoms can appear over hours. If you have any doubt, withdraw them.${ev.hadBaseline ? '' : ' No baseline on file, so many checks could not be compared.'}`, extra: '<button class="btn" data-act="withdraw" style="color:var(--amber)">If in doubt: withdraw player</button>' },
     }[ev.decision];
   const banner = `<section class="verdict ${V.cls}" ${isBase ? '' : 'role="alert"'}><span class="vi">${V.icon}</span><h1>${V.title}</h1><p>${V.text}</p>${V.extra || ''}</section>`;
   const why = !isBase && ev.reasons.length ? `<section class="card"><h3>Why</h3>${ev.reasons.map((x) => `<div class="why-row"><span>${esc(x)}</span>${/^(Speech|Eye movement)/.test(x) ? '<span class="tag exp">Experimental</span>' : '<span class="tag core">Core</span>'}</div>`).join('')}</section>` : '';
   const flagged = isBase ? [] : ev.rows.filter((x) => x.flag === true && Number.isFinite(+x.val) && Number.isFinite(+x.base));
   const cmp = flagged.length ? `<section class="card"><div class="row spread gap"><h3 style="margin:0">Today vs baseline</h3><span class="legend"><span><i style="background:color-mix(in srgb, var(--muted) 60%, var(--surface))"></i>Baseline</span><span><i style="background:var(--orange)"></i>Today</span></span></div>
     ${flagged.map((x) => { const m = Math.max(Math.abs(+x.val), Math.abs(+x.base)) || 1; return `<div class="cmp"><div class="cmp-head"><span>${esc(x.label)}</span><span class="muted">${fmt(x.base)} → <b>${fmt(x.val)}</b></span></div><div class="bar"><span class="base" style="width:${Math.max(3, (Math.abs(+x.base) / m) * 100)}%"></span></div><div class="bar"><span class="today" style="width:${Math.max(3, (Math.abs(+x.val) / m) * 100)}%"></span></div></div>`; }).join('')}</section>` : '';
+  const youth = a.category !== 'adult_male' && a.category !== 'adult_female';
   const steps = isBase ? [] : {
-    emergency: ['Call an ambulance (112)', 'Keep the neck still if it may be hurt', 'Stay with the player until help arrives'],
-    remove: ['Hand over to the team doctor', 'Keep them with a responsible adult for 24 h', 'No driving or alcohol tonight', 'Re-check in 24–48 h, then graded return to sport'],
-    monitor: ['Re-check at the end of play', 'Re-check tomorrow', 'If anything changes, remove from play'],
+    emergency: [`Call ${num} for an ambulance unless a doctor on site is managing them`, 'Keep the neck still if it may be hurt; only trained staff should remove a helmet', 'Stay with the player until help arrives', ...(youth ? ['Under 18 / age unknown: tell the parent or guardian'] : [])],
+    remove: aftercare(body, youth),
+    monitor: ['Keep watching them for the rest of the session and do not leave them alone', 'Re-check at the end of play and again the next day', 'If any symptom or sign appears, withdraw them and follow the concussion steps'],
   }[ev.decision];
-  const todo = steps.length ? `<section class="card"><h3>Next steps</h3>${steps.map((s) => `<button type="button" class="todo" data-act="tick" aria-pressed="false"><span class="tick"></span><span>${s}</span></button>`).join('')}</section>` : '';
+  const todo = steps.length ? `<section class="card"><h3>Next steps <span class="small muted">· ${esc(body.name)}</span></h3>${steps.map((s) => `<button type="button" class="todo" data-act="tick" aria-pressed="false"><span class="tick"></span><span>${esc(s)}</span></button>`).join('')}</section>` : '';
+  const rtp = !isBase && ev.decision !== 'monitor' ? returnPlanCard(a, r.date) : '';
 
   let lastGroup = '';
   const rowsHtml = ev.rows.map((row) => {
@@ -653,6 +698,7 @@ function viewReport(aid, rid) {
     ${why}
     ${cmp}
     ${todo}
+    ${rtp}
     <div class="stack no-print" style="margin:16px 0">
       <button class="btn primary lg block" data-act="print">${ICON.send} Share or print report</button>
       <div class="row gap"><button class="btn" style="flex:1" data-act="export">Export data</button>${isBase ? '' : `<a class="btn" style="flex:1" href="#/assess/${a.id}/match">Re-check now</a>`}</div>
@@ -663,6 +709,13 @@ function viewReport(aid, rid) {
       <tbody>${rowsHtml}</tbody></table></div></details>
     <p class="small muted">Thresholds for change from baseline are prototype placeholders, not validated cut-offs. Speech and eye measures are experimental. ConcussID does not diagnose concussion.</p>`;
   actions.tick = (el) => el.setAttribute('aria-pressed', String(el.getAttribute('aria-pressed') !== 'true'));
+  actions.withdraw = () => {
+    if (!confirm(`Withdraw ${a.name} from the game? This records a suspected concussion and starts the return-to-play plan.`)) return;
+    r.eval.decision = 'remove';
+    r.eval.reasons.push('Withdrawn on staff judgement (“If in doubt, sit them out”).');
+    r.eval.staffWithdrawn = true;
+    persist(); viewReport(aid, rid); window.scrollTo(0, 0);
+  };
   actions.print = () => window.print();
   actions.export = () => download(`concussid-report-${r.id}.json`, { athlete: { name: a.name, team: a.team, sport: a.sport }, report: r });
 }
@@ -699,6 +752,26 @@ function viewEvidence() {
     </ul>
     <p class="small muted">Reproduce with the accuracy kit: <code>node eval/eval-eye-korthals.mjs</code> (see <code>eval/README.md</code>).</p>
   </div>
+
+  <h2>Governing-body rules</h2>
+  <p>ConcussID applies these rules from the major bodies on every screen, whichever one your club chooses:</p>
+  <ul>
+    <li><b>Any suspected concussion means withdrawal, with no return that day.</b> That covers any red flag, visible sign, wrong Maddocks answer, or new or worse symptom, even if it later goes away. The weighted score threshold can add a withdrawal but never overrides one.</li>
+    <li><b>The app never clears a player.</b> A “No signs found” result says only a healthcare professional can rule concussion out, and offers “If in doubt: withdraw player”.</li>
+    <li><b>Red flags</b> follow the CRT6 list plus the UK 2024 additions: memory loss, behaviour change, speech difficulty, suspected skull fracture, brain surgery or bleeding disorder, blood thinners, intoxication. Any one means urgent medical help, using your body’s emergency number.</li>
+    <li><b>Aftercare</b> follows the UK 2024 wording: medical assessment within 24 h, not left alone, no alcohol, driving or sport for 24 h, minimise screens for 48 h, tell parents of under-18s, injury report, school or work before sport.</li>
+    <li><b>Return to play</b> is dated from the injury (day 0) using the chosen body’s minimums:</li>
+  </ul>
+  <div class="card table-wrap"><table>
+    <thead><tr><th>Body</th><th>Earliest return to competition</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>UK grassroots (The FA, RFU community, ECB…)</td><td>Day 21; full training not before day 15; 14 days symptom-free at rest</td><td><a href="${BODIES.uk.source.url}" target="_blank" rel="noopener">UK guidelines, Nov 2024</a></td></tr>
+      <tr><td>World Rugby, community</td><td>Day 21, all ages; rest 7 days for adults or 14 days for under-19s before the programme starts</td><td><a href="${BODIES.worldrugby.source.url}" target="_blank" rel="noopener">World Rugby</a></td></tr>
+      <tr><td>GAA, LGFA, Camogie</td><td>Day 15 for adult men (never before day 7, even with a specialist); clearance before contact. Day 21 used for others: <span class="tag exp">verify</span></td><td><a href="${BODIES.gaa.source.url}" target="_blank" rel="noopener">GAA guide, 2024</a></td></tr>
+      <tr><td>AFL, community</td><td>Day 21, all ages</td><td><a href="${BODIES.afl.source.url}" target="_blank" rel="noopener">AFL, 2024</a></td></tr>
+      <tr><td>International consensus</td><td>No fixed minimum; at least 24 h per step; medical clearance</td><td>${refLink('cisg2023')}</td></tr>
+    </tbody></table></div>
+  <p class="small muted">Elite processes (World Rugby HIA, AFL/AFLW 12-day rule, FIFA concussion substitutes, NFL protocol) need team doctors and are outside ConcussID’s scope. Rules change, so check each body’s current document. Figures were checked on 17 Nov 2026.</p>
 
   <h2>Known limitations</h2>
   <ul>
