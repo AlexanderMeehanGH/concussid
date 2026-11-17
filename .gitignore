@@ -1,0 +1,5 @@
+# Downloaded research data and synthetic test files (large; re-downloadable, see eval/README.md)
+eval/data/
+# Generated result dumps
+eval/results/*.json
+node_modules/
