@@ -93,14 +93,16 @@ export function evaluate(d, baseline, T = THRESHOLDS) {
     if (bad) { core = true; reasons.push(`Maddocks ${s.maddocks}/5 correct`); }
     add('Immediate assessment', 'Maddocks questions correct', `${s.maddocks}/5`, null, bad);
   }
+  let symptom = null;
   if (d.symptoms) {
-    const worse = baseline?.symptoms
-      ? SYMPTOMS.filter((_, i) => d.symptoms[i] > (baseline.symptoms[i] || 0))
-      : SYMPTOMS.filter((_, i) => d.symptoms[i] > 0);
-    const flag = match && worse.length > 0;
-    if (flag) { core = true; reasons.push(`${baseline ? 'Symptoms worse than baseline' : 'Symptoms reported'}: ${worse.join(', ')}`); }
-    add('Symptoms', 'Number of symptoms (/22)', s.symCount, b?.symCount, flag);
-    add('Symptoms', 'Symptom severity (/132)', s.symSeverity, b?.symSeverity, flag);
+    symptom = symptomVerdict(d.symptoms, baseline?.symptoms, T);
+    const flag = match ? !symptom.pass : null;
+    if (flag) {
+      core = true;
+      reasons.push(`Weighted symptom score ${symptom.score}${symptom.hasBaseline ? ` (baseline ${symptom.base})` : ''}: up ${symptom.rise}, fail threshold is ${symptom.threshold}`);
+    }
+    add('Symptoms', 'Weighted symptom score (/132)', s.symSeverity, b?.symSeverity, flag);
+    add('Symptoms', 'Number of symptoms (/22)', s.symCount, b?.symCount, null);
   }
   const cog = (label, key, drop, noBaseRule) => {
     if (s[key] == null) return;
@@ -134,5 +136,18 @@ export function evaluate(d, baseline, T = THRESHOLDS) {
   let decision = 'monitor';
   if (emergency) decision = 'emergency';
   else if (core || exp || urgentFace) decision = 'remove';
-  return { decision, coreFlag: core, expFlag: exp, expOnly: !core && exp && !urgentFace, urgentFace, reasons, rows, scores: s, hadBaseline: !!baseline };
+  return { decision, coreFlag: core, expFlag: exp, expOnly: !core && exp && !urgentFace, urgentFace, reasons, rows, scores: s, symptom, hadBaseline: !!baseline };
+}
+
+// Severity band for one 0–6 rating (SCAT wording).
+export const severityBand = (v) => (v <= 0 ? 'None' : v <= 2 ? 'Mild' : v <= 4 ? 'Moderate' : 'Severe');
+
+// Weighted symptom score and pass/fail against the research threshold (THRESHOLDS.symptomSeverityRise).
+export function symptomVerdict(symptoms, baseSymptoms, T = THRESHOLDS) {
+  const score = sum(symptoms);
+  const hasBaseline = Array.isArray(baseSymptoms);
+  const base = hasBaseline ? sum(baseSymptoms) : 0;
+  const rise = score - base;
+  const threshold = T.symptomSeverityRise;
+  return { score, base, rise, threshold, hasBaseline, pass: rise < threshold };
 }

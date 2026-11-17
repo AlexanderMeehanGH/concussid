@@ -3,7 +3,7 @@ import {
   BALANCE_STANCES, BALANCE_ERRORS, THRESHOLDS, SPEECH_TASKS, SPEECH_LABELS, FACE_LABELS,
 } from './protocol.js';
 import { recordAudio, analyzeSpeech } from './speech.js';
-import { sum, fmt, gcsTotal, anyRed, digitsScore, digitsDone, scoreOf, evaluate } from './scoring.js';
+import { sum, fmt, gcsTotal, anyRed, digitsScore, digitsDone, scoreOf, evaluate, symptomVerdict, severityBand } from './scoring.js';
 import { startCamera, stopCamera, initFace, runFaceProtocol, faceMetrics, detectOnce } from './face.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -75,6 +75,8 @@ const ICON = {
 };
 const initials = (name) => (String(name).match(/\d+/)?.[0] || String(name).split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '?');
 const lastAssessment = (a) => a.assessments[a.assessments.length - 1];
+// The baseline that was on file when an assessment was done.
+const baselineFor = (a, x) => [...(a.oldBaselines || []), a.baseline].filter((b) => b && b.date <= x.date).sort((p, q) => p.date.localeCompare(q.date)).pop() || null;
 const isUnderReview = (a) => { const x = lastAssessment(a); return x && x.eval?.decision !== 'monitor' && Date.now() - new Date(x.date) < 48 * 3600e3; };
 const ago = (iso) => { const m = Math.round((Date.now() - new Date(iso)) / 60000); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : new Date(iso).toLocaleDateString(); };
 
@@ -97,7 +99,7 @@ function viewHome() {
   </section>
 
   ${review.length ? `<div class="section-head"><h2>Under review</h2><span class="small muted">${review.length} player${review.length > 1 ? 's' : ''}</span></div>
-  <div class="list">${review.map((a) => { const x = lastAssessment(a); return `<a class="list-row" href="#/report/${a.id}/${x.id}"><span class="avatar ${x.eval.decision === 'emergency' ? 'red' : 'amber'}">${esc(initials(a.name))}</span><span class="grow"><span class="title">${esc(a.name)}</span><span class="sub">${x.eval.decision === 'emergency' ? 'Emergency' : 'Removed from play'} · ${ago(x.date)} · re-check due</span></span>${ICON.arrow}</a>`; }).join('')}</div>` : ''}
+  <div class="list">${review.map((a) => { const x = lastAssessment(a); return `<a class="list-row" href="#/report/${a.id}/${x.id}"><span class="avatar ${x.eval.decision === 'emergency' ? 'red' : 'amber'}">${esc(initials(a.name))}</span><span class="grow"><span class="title">${esc(a.name)}</span><span class="sub">${x.eval.decision === 'emergency' ? 'Emergency' : 'Withdrawn from game'} · ${ago(x.date)} · re-check due</span></span>${ICON.arrow}</a>`; }).join('')}</div>` : ''}
 
   <div class="section-head"><h2>Squad baselines</h2><a class="small" href="#/athletes">${squad.length ? `${withBase} of ${squad.length} recorded` : 'Add your squad'}</a></div>
   ${squad.length ? `<div class="bar" style="margin-bottom:10px"><span style="width:${Math.round((withBase / squad.length) * 100)}%"></span></div>` : ''}
@@ -153,7 +155,7 @@ function viewAthletes() {
 function viewAthlete(id) {
   const a = getAthlete(id);
   if (!a) { location.hash = '#/athletes'; return; }
-  const decTag = (d) => ({ emergency: '<span class="tag red">Emergency</span>', remove: '<span class="tag red">Remove from play</span>', monitor: '<span class="tag green">No signs detected</span>' }[d] || '');
+  const decTag = (d) => ({ emergency: '<span class="tag red">Emergency</span>', remove: '<span class="tag red">Withdrawn from game</span>', monitor: '<span class="tag green">No signs detected</span>' }[d] || '');
   app.innerHTML = `
   <div class="wiz-top"><a class="btn icon-btn" href="#/athletes" aria-label="Back to squad">${ICON.back}</a><span></span></div>
   <div class="row gap" style="margin-bottom:6px"><span class="avatar" style="width:56px;height:56px;font-size:1.2rem;border-radius:16px">${esc(initials(a.name))}</span><div><h1 style="margin:0">${esc(a.name)}</h1><span class="muted">${esc([a.team, a.sport].filter(Boolean).join(' · '))}</span></div></div>
@@ -212,6 +214,19 @@ function speakWords(words, btn) {
   }, i * 1000));
 }
 
+// Weighted symptom score card: each symptom counts its own 0–6 severity; pass/fail vs baseline.
+function symptomScoreCard(symptoms, baseSymptoms, judge, sticky = false) {
+  const v = symptomVerdict(symptoms, baseSymptoms);
+  const bands = { Mild: 0, Moderate: 0, Severe: 0 };
+  symptoms.forEach((x) => { if (x > 0) bands[severityBand(x)]++; });
+  const badge = judge ? (v.pass ? '<span class="score-pill">PASS</span>' : '<span class="score-pill bad">FAIL</span>') : '';
+  return `<section class="card score-card ${sticky ? 'sticky' : ''} ${judge && !v.pass ? 'fail' : ''}" aria-live="polite">
+    <div class="row spread gap"><span><span class="small muted">Weighted symptom score</span><br><b class="big-num">${v.score}</b><span class="muted"> / 132</span></span>${badge}</div>
+    <div class="weights"><span><i class="w1"></i>${bands.Mild} mild (1–2 pts each)</span><span><i class="w3"></i>${bands.Moderate} moderate (3–4 pts)</span><span><i class="w5"></i>${bands.Severe} severe (5–6 pts)</span></div>
+    ${judge ? `<p class="small" style="margin:8px 0 0">${v.hasBaseline ? `Baseline ${v.base} · change <b>${v.rise >= 0 ? '+' : ''}${v.rise}</b>` : '<b>No baseline</b>, compared with 0'} · fails at <b>+${v.threshold} or more</b> <span class="muted">(Harmon et al., 2024: catches 87% of concussions, clears 79% of healthy players)</span></p>` : ''}
+  </section>`;
+}
+
 const STEPS = {
   redflags: {
     title: 'Any red flags?', refs: ['cisg2023', 'scat6', 'teasdale1974'],
@@ -232,7 +247,7 @@ const STEPS = {
     html(d) {
       d.observable ??= OBSERVABLE_SIGNS.map(() => false);
       return `<p class="lede">Seen directly or on video. Any one means the player comes off.</p>
-      ${d.observable.some(Boolean) ? '<div class="banner red" role="alert"><b>Remove from play.</b> Keep going to record findings for the doctor.</div>' : ''}
+      ${d.observable.some(Boolean) ? '<div class="banner red" role="alert"><b>Withdraw Player from Game.</b> Keep going to record findings for the doctor.</div>' : ''}
       ${checkList('obs', OBSERVABLE_SIGNS, d.observable)}`;
     },
   },
@@ -254,7 +269,7 @@ const STEPS = {
       const i = d.symIdx, s = SYMPTOMS[i];
       if (d.symList) {
         return `<div class="row spread gap"><p class="lede" style="margin:0">All symptoms · 0 = none, 6 = severe</p><button type="button" class="btn sm" data-act="symview">One at a time</button></div>
-        <div class="sticky-sum">Symptoms ${n} / 22 · severity ${sev} / 132</div>
+        ${symptomScoreCard(d.symptoms, W.athlete.baseline?.symptoms, W.mode === 'match', true)}
         <div class="card">${SYMPTOMS.map((x, k) => `<div class="sym"><span class="sym-name">${esc(x)}</span><div class="rate">${[0, 1, 2, 3, 4, 5, 6].map((v) => `<button type="button" class="${d.symptoms[k] === v ? `on ${v >= 4 ? 'hi' : ''}` : ''}" data-act="rate" data-i="${k}" data-v="${v}" aria-label="${esc(x)} ${v}">${v}</button>`).join('')}</div></div>`).join('')}</div>`;
       }
       return `<div class="row spread gap"><span class="player-pill">${ICON.phone} Player mode</span><button type="button" class="btn sm ghost" data-act="symview">See all</button></div>
@@ -265,7 +280,8 @@ const STEPS = {
         <div class="scale-labels"><span>None</span><span>Mild</span><span>Moderate</span><span>Severe</span></div>
         <div class="sym-nav"><button type="button" class="btn sm" data-act="symprev" ${i === 0 ? 'disabled' : ''}>${ICON.back} Previous</button><button type="button" class="btn sm" data-act="symnext" ${i === SYMPTOMS.length - 1 ? 'disabled' : ''}>Next ${ICON.arrow}</button></div>
       </section>
-      <div class="chips">${SYMPTOMS.map((x, k) => (d.symptoms[k] > 0 ? `<span class="chip warn">${esc(x)} · ${d.symptoms[k]}</span>` : '')).join('')}${n ? '' : '<span class="chip">No symptoms so far</span>'}</div>`;
+      <div class="chips">${SYMPTOMS.map((x, k) => (d.symptoms[k] > 0 ? `<span class="chip warn">${esc(x)} · ${severityBand(d.symptoms[k])} ${d.symptoms[k]}</span>` : '')).join('')}${n ? '' : '<span class="chip">No symptoms so far</span>'}</div>
+      <p class="small muted" style="margin-top:12px">Staff: tap “See all” for the weighted score and pass/fail. It is hidden here so it can’t influence the player’s answers.</p>`;
     },
   },
   orientation: {
@@ -606,7 +622,7 @@ function viewReport(aid, rid) {
     ? { cls: 'green', icon: ICON.ok, title: 'Baseline saved', text: `Future pitchside screens for ${esc(a.name)} will be compared with these values. Re-record each season, when the player is rested and hasn’t trained in the last few hours.` }
     : {
       emergency: { cls: 'red', icon: ICON.alert.replace('class="icon"', 'width="26" height="26"'), title: 'Emergency', text: 'Call an ambulance now. Don’t move the player if the neck may be hurt, and don’t leave them alone.', extra: '<a class="btn" href="tel:112">Call 112</a>' },
-      remove: { cls: 'red', icon: ICON.minus, title: 'Remove from play', text: `Suspected concussion. Must not return today. A doctor decides the diagnosis.${ev.expOnly ? ' This result comes only from the experimental speech or eye measures.' : ''}` },
+      remove: { cls: 'red', icon: ICON.minus, title: 'Withdraw Player from Game', text: `Suspected concussion. Must not return today. A doctor decides the diagnosis.${ev.expOnly ? ' This result comes only from the experimental speech or eye measures.' : ''}` },
       monitor: { cls: 'amber', icon: ICON.clock.replace('class="icon"', 'width="26" height="26"'), title: 'No signs found', text: `This screen found nothing, but that does not rule out concussion. Symptoms can appear over hours.${ev.hadBaseline ? '' : ' No baseline on file, so many checks could not be compared.'}` },
     }[ev.decision];
   const banner = `<section class="verdict ${V.cls}" ${isBase ? '' : 'role="alert"'}><span class="vi">${V.icon}</span><h1>${V.title}</h1><p>${V.text}</p>${V.extra || ''}</section>`;
@@ -633,6 +649,7 @@ function viewReport(aid, rid) {
     <div class="wiz-top no-print"><a class="btn icon-btn" href="#/athlete/${a.id}" aria-label="Back to ${esc(a.name)}">${ICON.back}</a>
       <div class="who"><b>${esc(a.name)}</b><span>${isBase ? 'Baseline' : 'Pitchside screen'} · ${new Date(r.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}</span></div><span style="width:44px"></span></div>
     ${banner}
+    ${r.symptoms ? symptomScoreCard(r.symptoms, isBase ? null : baselineFor(a, r)?.symptoms, !isBase) : ''}
     ${why}
     ${cmp}
     ${todo}
@@ -660,7 +677,7 @@ function viewEvidence() {
       <tr><td>Red flags, GCS</td><td>Checklist + GCS; any positive → emergency</td><td><span class="tag core">Consensus</span> ${refLink('cisg2023')}, ${refLink('teasdale1974')}</td></tr>
       <tr><td>Observable signs</td><td>Checklist incl. video-sign definitions; any → remove</td><td><span class="tag core">Consensus</span> ${refLink('scat6')}, ${refLink('davis2019')}</td></tr>
       <tr><td>Maddocks questions</td><td>5 recent-memory questions; any error → remove</td><td><span class="tag core">Consensus</span> ${refLink('maddocks1995')}</td></tr>
-      <tr><td>Symptoms</td><td>22-item 0–6 scale; any symptom worse than baseline → remove</td><td><span class="tag core">Consensus</span> ${refLink('scat6')}</td></tr>
+      <tr><td>Symptoms</td><td>22 items, each scored by severity (none 0 · mild 1–2 · moderate 3–4 · severe 5–6) and summed into a weighted score out of 132. <b>Fail</b> = a rise of 2 or more over the player’s baseline (no baseline: over 0). In the source study this caught 87% of concussions (95% CI 78–94%) and cleared 79% of healthy players (70–87%); AUC 0.94.</td><td><span class="tag core">Peer-reviewed cut-off</span> ${refLink('harmon2024')}, ${refLink('scat6')}</td></tr>
       <tr><td>Cognition (SAC)</td><td>Orientation, 10-word immediate memory ×3, digits backward, months reverse, delayed recall (/50)</td><td><span class="tag core">Consensus</span> ${refLink('mccrea1998')}, ${refLink('scat6')}</td></tr>
       <tr><td>Balance</td><td>Modified BESS, 3 × 20 s stances, error count</td><td><span class="tag core">Consensus</span> ${refLink('riemann2000')}</td></tr>
       <tr><td>Speech acoustics</td><td>Sustained vowel (pitch, pitch variability, period &amp; amplitude perturbation), “pa-ta-ka” rate &amp; regularity, reading (speech/articulation rate, pauses, prosody). Syllable nuclei via intensity peaks.</td><td><span class="tag exp">Experimental</span> ${refLink('falcone2013')}, ${refLink('daudet2017')}, ${refLink('talkar2020')}, method ${refLink('dejong2009')}</td></tr>

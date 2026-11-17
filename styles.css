@@ -221,6 +221,15 @@ details.card[open] > summary { margin-bottom: 12px; }
 .rate button { width: 38px; height: 38px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; font-weight: 700; cursor: pointer; }
 .rate button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .rate button.on.hi { background: var(--red); border-color: var(--red); color: #fff; }
+.score-card { padding: 14px 16px; }
+.score-card.sticky { position: sticky; top: 64px; z-index: 5; }
+.score-card.fail { border: 2px solid var(--red); }
+.big-num { font-family: var(--display); font-size: 2rem; line-height: 1.1; }
+.weights { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; font-size: .78rem; color: var(--muted); }
+.weights i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.weights .w1 { background: var(--amber-soft); border: 1px solid var(--amber); }
+.weights .w3 { background: color-mix(in srgb, var(--orange) 45%, var(--surface)); }
+.weights .w5 { background: var(--red); }
 .sticky-sum { position: sticky; top: 64px; z-index: 5; background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px; font-weight: 700; margin: 10px 0; }
 
 /* memory / concentration / balance */

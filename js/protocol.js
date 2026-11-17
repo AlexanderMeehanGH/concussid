@@ -12,6 +12,10 @@ export const REFS = {
     short: 'Echemendia et al., 2023',
     full: 'Echemendia RJ, Brett BL, Broglio S, et al. Sport Concussion Assessment Tool – 6 (SCAT6). Br J Sports Med. 2023;57(11):622–631.',
   },
+  harmon2024: {
+    short: 'Harmon et al., 2024',
+    full: 'Harmon KG, Whelan BM, Aukerman DF, et al. Diagnosis of sports-related concussion using symptom report or Standardized Assessment of Concussion. JAMA Netw Open. 2024;7(6):e2416223. doi:10.1001/jamanetworkopen.2024.16223',
+  },
   maddocks1995: {
     short: 'Maddocks et al., 1995',
     full: 'Maddocks DL, Dicker GD, Saling MM. The assessment of orientation following concussion in athletes. Clin J Sport Med. 1995;5(1):32–35.',
@@ -153,6 +157,14 @@ export const READING_PASSAGE =
 // research prototype — they are NOT validated cut-offs and must be calibrated
 // against a properly powered clinical dataset before any real-world use.
 export const THRESHOLDS = {
+  // Weighted symptom score = SCAT symptom severity score: each of the 22 symptoms scores its
+  // own 0–6 severity rating (none 0 · mild 1–2 · moderate 3–4 · severe 5–6), summed (0–132).
+  // FAIL when it rises ≥ 2 points above the player's baseline. Harmon et al. 2024 (JAMA Netw
+  // Open, 92 concussed vs 92 matched controls, NCAA D1): severity-score rise AUC 0.94;
+  // ≥2 points → sensitivity 87% (78–94), specificity 79% (70–87); ≥3 → 84% / 82%.
+  // 2 is chosen because it ties 3 on overall accuracy (Youden J 0.66) but misses fewer concussions.
+  // With no baseline on file, the baseline is taken as 0 (any rated symptom ≥ 2 points fails).
+  symptomSeverityRise: 2,
   orientationDrop: 1,
   immediateDrop: 3,
   concentrationDrop: 1,
